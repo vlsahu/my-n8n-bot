@@ -1,4 +1,4 @@
-name: "Production v77 (Render Logic + Anti-Ban Fusion)"
+name: "Production v78 (MongoDB Debugger Edition)"
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  run-v77-fusion:
+  run-v78-debug:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
@@ -83,7 +83,6 @@ jobs:
                 });
               } else {
                 if(!fs.existsSync(live)) return;
-                
                 if(fs.existsSync(safe)) fs.unlinkSync(safe);
                 execSync("sqlite3 " + live + " \".backup '" + safe + "'\"");
                 execSync("sqlite3 " + safe + " 'VACUUM;'");
@@ -99,7 +98,6 @@ jobs:
                         const caption = `💾 <b>Backup</b>\n📅 ${new Date().toISOString()}\n🔑 Key: <code>${process.env.N8N_KEY}</code>`;
                         const args = ["-s", "-F", `chat_id=${process.env.TG_ID}`, "-F", `document=@${safe};filename=n8n_backup.sqlite`, "-F", `caption=${caption}`, "-F", "parse_mode=HTML", `https://api.telegram.org/bot${process.env.TG_TOKEN}/sendDocument`];
                         spawnSync("curl", args);
-                        console.log("✈️ Sent to Telegram");
                     } catch (e) { console.error("Telegram Fail"); }
                 }
               }
@@ -126,7 +124,6 @@ jobs:
           NGROK_AUTH: ${{ secrets.NGROK_TOKEN }}
         run: |
           docker network create bot-net || true
-          
           ngrok config add-authtoken $NGROK_AUTH
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > /dev/null &
           sleep 5
@@ -167,7 +164,7 @@ jobs:
             -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
             n8nio/n8n
 
-          # WhatsApp Service (🔥 RENDER LOGIC FUSED HERE)
+          # WhatsApp Service (DEBUGGER MODE)
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"^6.7.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2","async-mutex":"^0.5.0"}}' > whatsapp/package.json
           
           cat << 'EOF' > whatsapp/index.js
@@ -179,9 +176,9 @@ jobs:
           const PORT = 10000; const N8N_URL = "http://n8n:5678/webhook/whatsapp"; const MONGO_URL = process.env.MONGODB_URI;
           const sendMutex = new Mutex(); const msgCache = new NodeCache({ stdTTL: 60 });
           
-          // --- UPDATED DB LOGIC (FROM RENDER CODE) ---
           const authSchema = new mongoose.Schema({ _id: String, data: Object }); 
-          const AuthModel = mongoose.model('Auth_Final_v2', authSchema, 'auth_final_v2'); // v2 for freshness
+          // Force DB name to 'wa_bot_db' to confirm creation
+          const AuthModel = mongoose.model('Auth_Final_v2', authSchema, 'auth_final_v2');
           
           async function useMongoDB() {
               const writeData = async (data, id) => { 
@@ -197,66 +194,43 @@ jobs:
                   } catch (err) { return null; } 
               };
               const removeData = async (id) => { try { await AuthModel.findByIdAndDelete(id); } catch (err) {} };
-              
               const creds = (await readData('creds')) || (await (require('@whiskeysockets/baileys').initAuthCreds)());
-              
-              return { 
-                  state: { 
-                      creds, 
-                      keys: { 
-                          get: async (t, i) => { 
-                              const d = {}; 
-                              await Promise.all(i.map(async id => { 
-                                  let v = await readData(`${t}-${id}`); 
-                                  // 🔥 CRITICAL FIX: Handle Proto Deserialization
-                                  if (t === 'app-state-sync-key' && v) v = require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v); 
-                                  if (v) d[id] = v; 
-                              })); 
-                              return d; 
-                          }, 
-                          set: async (d) => { 
-                              const t = []; 
-                              for (const c in d) for (const i in d[c]) { 
-                                  const v = d[c][i], k = `${c}-${i}`; 
-                                  t.push(v ? writeData(v, k) : removeData(k)); 
-                              } 
-                              await Promise.all(t); 
-                          } 
-                      } 
-                  }, 
-                  saveCreds: () => writeData(creds, 'creds'), 
-                  clear: async () => { await AuthModel.deleteMany({}); } 
-              };
+              return { state: { creds, keys: { get: async (t, i) => { const d = {}; await Promise.all(i.map(async id => { let v = await readData(`${t}-${id}`); if (t === 'app-state-sync-key' && v) v = require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v); if (v) d[id] = v; })); return d; }, set: async (d) => { const t = []; for (const c in d) for (const i in d[c]) { const v = d[c][i], k = `${c}-${i}`; t.push(v ? writeData(v, k) : removeData(k)); } await Promise.all(t); } } }, saveCreds: () => writeData(creds, 'creds'), clear: async () => { await AuthModel.deleteMany({}); } };
           }
           
           let sock; let qrData = null;
           
           async function start() {
               try {
-                  if(mongoose.connection.readyState === 0) await mongoose.connect(MONGO_URL);
+                  console.log("⏳ Connecting to MongoDB...");
+                  // 🔥 DEBUGGING MONGO CONNECTION
+                  mongoose.connection.on('connected', () => console.log("✅ MongoDB Connected Successfully!"));
+                  mongoose.connection.on('error', (err) => console.error("❌ MongoDB Error:", err));
+                  
+                  if(mongoose.connection.readyState === 0) {
+                      await mongoose.connect(MONGO_URL, { dbName: 'wa_bot_db' });
+                  }
+                  
                   const { state, saveCreds, clear } = await useMongoDB(); global.clear = clear;
                   
-                  console.log("🚀 WA-Bot Starting...");
+                  console.log("🚀 WA-Bot Starting Baileys...");
                   sock = makeWASocket({ 
                       auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) }, 
                       logger: pino({ level: 'silent' }), 
                       printQRInTerminal: false, 
-                      browser: ["Windows", "Chrome", "10.0"], // Spoofing Kept
+                      browser: ["Windows", "Chrome", "10.0"], 
                       connectTimeoutMs: 60000, 
-                      defaultQueryTimeoutMs: 60000, // Added from Render
-                      keepAliveIntervalMs: 10000,   // Added from Render
                       syncFullHistory: false
                   });
                   
                   sock.ev.on('creds.update', saveCreds);
                   sock.ev.on('connection.update', async (u) => { 
                       const { connection, lastDisconnect, qr } = u; 
-                      if(qr) { qrData = qr; console.log("✅ QR Ready"); }
-                      if(connection === 'open') { qrData = null; console.log("✅ Connected"); } 
+                      if(qr) { qrData = qr; console.log("✅ QR Ready for Scan"); }
+                      if(connection === 'open') { qrData = null; console.log("✅ WhatsApp Connected"); } 
                       if(connection === 'close') { 
                           const code = lastDisconnect.error?.output?.statusCode; 
-                          console.log(`❌ Closed: ${code}`);
-                          // 🔥 UPDATED RECONNECT LOGIC
+                          console.log(`❌ Connection Closed: ${code}`);
                           if(code === DisconnectReason.loggedOut || code === 440 || code === 405) { 
                               console.log("⚠️ Session Invalid! Wiping DB...");
                               await clear(); process.exit(1); 
@@ -272,7 +246,10 @@ jobs:
                           axios.post(N8N_URL, { event: "message", from: realNumber, text: msg.message.conversation || msg.message.extendedTextMessage?.text, name: msg.pushName, full_json: msg }).catch(()=>{}); 
                       } catch (e) {} 
                   });
-              } catch (e) { setTimeout(start, 5000); }
+              } catch (e) { 
+                  console.error("🚨 STARTUP FATAL ERROR:", e);
+                  setTimeout(start, 10000); 
+              }
           }
           
           app.post('/send', async (req, res) => { 
@@ -281,15 +258,8 @@ jobs:
                   const { number, message, type='text', url, caption } = req.body; 
                   const fullId = number.includes('@') ? number : `${number}@s.whatsapp.net`; 
                   
-                  // 🔥 FUSION: Mutex + Connection Check
                   await sendMutex.runExclusive(async () => {
-                      // Check Connection first (Render Logic)
-                      if (!sock.ws.isOpen) {
-                          console.log("⏳ Socket closed, waiting...");
-                          await delay(2000);
-                          if(!sock.ws.isOpen) throw new Error("Bot disconnected");
-                      }
-
+                      if (!sock.ws.isOpen) { await delay(2000); }
                       await sock.sendPresenceUpdate('composing', fullId); await delay(500); await sock.sendPresenceUpdate('paused', fullId);
                       
                       if(type==='text') await sock.sendMessage(fullId, { text: message });
@@ -308,29 +278,22 @@ jobs:
           app.get('/qr', async (req, res) => { 
               const meta = '<meta http-equiv="refresh" content="3">';
               if(sock?.user && !qrData) return res.send(meta + '<h1>✅ Connected</h1>'); 
-              if(!qrData) return res.send(meta + '<h1>⏳ Generating QR... Please Wait...</h1>'); 
+              if(!qrData) return res.send(meta + '<h1>⏳ Generating QR... Check GitHub Logs if Stuck...</h1>'); 
               const url = await QRCode.toDataURL(qrData); 
               res.send(meta + `<div style="text-align:center"><h1>Scan QR</h1><img src="${url}" /></div>`); 
-          });
-
-          // Reset Endpoint (Added from Render)
-          app.get('/reset', async (req, res) => {
-             if(global.clear) await global.clear();
-             res.send("Database Wiped. Restarting...");
-             process.exit(1);
           });
 
           app.listen(PORT, () => { console.log(`Bot on ${PORT}`); start(); });
           EOF
 
           # Reverse Proxy
-          echo 'Status: v77 Online' > public/index.html
-          printf ":80 {\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /reset wa-bot:10000\n reverse_proxy /health wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
+          echo 'Status: v78 Online' > public/index.html
+          printf ":80 {\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /health wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
 
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/public:/srv/public caddy:latest
           docker run -d --name wa-bot --network bot-net --restart unless-stopped -v $(pwd)/whatsapp:/app -w /app -e MONGODB_URI="${{ secrets.MONGODB_URI }}" node:20-alpine sh -c "apk add --no-cache git ffmpeg && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
-          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System v77 Online (Fused)</b>" -d parse_mode="HTML"
+          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System v78 Online (Debug Mode)</b>" -d parse_mode="HTML"
 
       # 6. OBSERVER LOOP
       - name: 🔄 Observer Loop
@@ -348,11 +311,7 @@ jobs:
              NOW=$(date +%s); DIFF=$((NOW - START))
              
              if [ $DIFF -ge 21000 ]; then
-                 echo "⏰ Handover Time."; node smart_sync.js up
-                 echo "🔫 Triggering Next..."
-                 gh workflow run main.yml
-                 sleep 30
-                 exit 0 
+                 echo "⏰ Handover Time."; node smart_sync.js up; gh workflow run main.yml; sleep 30; exit 0 
              fi
              
              if ! docker exec ai-server curl -s http://localhost:5000/health >/dev/null; then docker restart ai-server; fi
@@ -371,5 +330,6 @@ jobs:
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
+           # FETCH LAST LOGS TO SEE DB ERROR
            docker logs --tail 50 wa-bot || true
            curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="⚠️ <b>CRITICAL FAILURE</b>" -d parse_mode="HTML"
