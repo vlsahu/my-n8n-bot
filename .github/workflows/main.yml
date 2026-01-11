@@ -1,4 +1,4 @@
-name: "Production v85 (Outgoing Msg Debugger)"
+name: "Production v86 (Stabilized & Permanent)"
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  run-v85-debug-outgoing:
+  run-v86-stable:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
@@ -164,7 +164,7 @@ jobs:
             -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
             n8nio/n8n
 
-          # WhatsApp Service (🔥 LOGGER MODE 🔥)
+          # WhatsApp Service (🔥 STABLE + OUTGOING 🔥)
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"^6.7.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
           
           cat << 'EOF' > whatsapp/index.js
@@ -173,10 +173,13 @@ jobs:
           const NodeCache = require('node-cache');
           
           const app = express(); app.use(express.json());
-          const PORT = 10000; const N8N_URL = "http://n8n:5678/webhook/whatsapp"; const MONGO_URL = process.env.MONGODB_URI;
+          // INTERNAL URL for stability
+          const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
+          const MONGO_URL = process.env.MONGODB_URI;
           
           const authSchema = new mongoose.Schema({ _id: String, data: Object }); 
-          const AuthModel = mongoose.model('Auth_Production_v85', authSchema, 'auth_production_v85');
+          // 🔥 PERMANENT DB NAME: Scan once, works forever
+          const AuthModel = mongoose.model('Auth_Fixed_Final', authSchema, 'auth_fixed_final');
           
           async function useMongoDB() {
               const writeData = async (data, id) => { try { const json = JSON.parse(JSON.stringify(data, BufferJSON.replacer)); await AuthModel.findOneAndUpdate({ _id: id }, { data: json, _id: id }, { upsert: true }); } catch (err) { console.error("DB Write Fail:", err.message); } };
@@ -195,7 +198,7 @@ jobs:
                   const { state, saveCreds, clear } = await useMongoDB(); global.clear = clear;
                   
                   const { version } = await fetchLatestBaileysVersion();
-                  console.log(`🚀 Starting Bot v85 with Version: ${version.join('.')}`);
+                  console.log(`🚀 Starting Bot v86 with Version: ${version.join('.')}`);
 
                   sock = makeWASocket({ 
                       version,
@@ -212,7 +215,7 @@ jobs:
                   sock.ev.on('connection.update', async (u) => { 
                       const { connection, lastDisconnect, qr } = u; 
                       if(qr) qrData = qr; 
-                      if(connection === 'open') { qrData = null; console.log("✅ Connected!"); } 
+                      if(connection === 'open') { qrData = null; console.log("✅ Connected to WhatsApp!"); } 
                       if(connection === 'close') { 
                           const code = lastDisconnect.error?.output?.statusCode; 
                           if(code === DisconnectReason.loggedOut || code === 440 || code === 405) { 
@@ -223,29 +226,32 @@ jobs:
                   
                   sock.ev.on('messages.upsert', async ({ messages }) => { 
                       const msg = messages[0]; 
-                      if(!msg.message) return; // Basic validation
+                      if(!msg.message) return;
                       
                       try { 
                           const realNumber = (msg.key.participant || msg.key.remoteJid).split('@')[0]; 
                           const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "Media/Other";
-                          
-                          // 🔥 DEBUGGING LOGS (Check GitHub Logs for these)
-                          if (msg.key.fromMe) {
-                              console.log(`📤 OUTGOING Detected: ${text} to ${realNumber}`);
-                          } else {
-                              console.log(`💬 INCOMING Detected: ${text} from ${realNumber}`);
-                          }
+                          const isFromMe = msg.key.fromMe || false;
+                          const pushName = msg.pushName || (isFromMe ? "Me" : "Unknown");
 
-                          // Send to n8n
+                          console.log(`📡 Processing: "${text}" | FromMe: ${isFromMe}`);
+
+                          // Send to n8n with explicit error handling
                           await axios.post(N8N_URL, { 
                               from: realNumber, 
                               text: text, 
-                              name: msg.pushName,
-                              fromMe: msg.key.fromMe, // True = Sent by You
+                              name: pushName,
+                              fromMe: isFromMe,
                               full_json: msg 
-                          }); 
+                          }).then(() => {
+                              console.log("✅ Webhook Sent Successfully");
+                          }).catch((err) => {
+                              console.error(`❌ Webhook Failed: ${err.message}`);
+                              if(err.response) console.error(`   Status: ${err.response.status} (Check if n8n is Active)`);
+                          });
+
                       } catch (e) {
-                          console.error("Webhook Error:", e.message);
+                          console.error("Critical Msg Error:", e.message);
                       } 
                   });
               } catch (e) { setTimeout(start, 5000); }
@@ -275,13 +281,13 @@ jobs:
           EOF
 
           # Reverse Proxy
-          echo 'Status: v85 Online' > public/index.html
+          echo 'Status: v86 Online' > public/index.html
           printf ":80 {\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /reset wa-bot:10000\n reverse_proxy /health wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
 
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/public:/srv/public caddy:latest
           docker run -d --name wa-bot --network bot-net --restart unless-stopped -v $(pwd)/whatsapp:/app -w /app -e MONGODB_URI="${{ secrets.MONGODB_URI }}" node:20-alpine sh -c "apk add --no-cache git ffmpeg && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
-          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System v85 Online (With Logs)</b>" -d parse_mode="HTML"
+          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System v86 Online (Logs + Stable)</b>" -d parse_mode="HTML"
 
       # 6. OBSERVER LOOP
       - name: 🔄 Observer Loop
