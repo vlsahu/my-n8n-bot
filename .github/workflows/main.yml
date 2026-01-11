@@ -1,4 +1,4 @@
-name: "Production v84 (Full History Recorder)"
+name: "Production v85 (Outgoing Msg Debugger)"
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  run-v84-recorder:
+  run-v85-debug-outgoing:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
@@ -164,7 +164,7 @@ jobs:
             -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
             n8nio/n8n
 
-          # WhatsApp Service (🔥 SEND EVERYTHING 🔥)
+          # WhatsApp Service (🔥 LOGGER MODE 🔥)
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"^6.7.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
           
           cat << 'EOF' > whatsapp/index.js
@@ -176,8 +176,7 @@ jobs:
           const PORT = 10000; const N8N_URL = "http://n8n:5678/webhook/whatsapp"; const MONGO_URL = process.env.MONGODB_URI;
           
           const authSchema = new mongoose.Schema({ _id: String, data: Object }); 
-          // Keeping Auth_Final_v4 because it's working well
-          const AuthModel = mongoose.model('Auth_Final_v4', authSchema, 'auth_final_v4');
+          const AuthModel = mongoose.model('Auth_Production_v85', authSchema, 'auth_production_v85');
           
           async function useMongoDB() {
               const writeData = async (data, id) => { try { const json = JSON.parse(JSON.stringify(data, BufferJSON.replacer)); await AuthModel.findOneAndUpdate({ _id: id }, { data: json, _id: id }, { upsert: true }); } catch (err) { console.error("DB Write Fail:", err.message); } };
@@ -192,11 +191,11 @@ jobs:
           
           async function start() {
               try {
-                  if(mongoose.connection.readyState === 0) await mongoose.connect(MONGO_URL);
+                  if(mongoose.connection.readyState === 0) await mongoose.connect(MONGO_URL, { dbName: 'wa_bot_db' });
                   const { state, saveCreds, clear } = await useMongoDB(); global.clear = clear;
                   
                   const { version } = await fetchLatestBaileysVersion();
-                  console.log(`🚀 Starting Bot with REAL Version: ${version.join('.')}`);
+                  console.log(`🚀 Starting Bot v85 with Version: ${version.join('.')}`);
 
                   sock = makeWASocket({ 
                       version,
@@ -205,8 +204,6 @@ jobs:
                       printQRInTerminal: false, 
                       browser: ["Windows", "Chrome", "10.0"], 
                       connectTimeoutMs: 60000, 
-                      defaultQueryTimeoutMs: 60000,
-                      keepAliveIntervalMs: 10000,
                       syncFullHistory: false,
                       msgRetryCounterCache
                   });
@@ -225,19 +222,31 @@ jobs:
                   });
                   
                   sock.ev.on('messages.upsert', async ({ messages }) => { 
-                      const msg = messages[0]; if(!msg.message) return; // Removed `msg.key.fromMe` check!
+                      const msg = messages[0]; 
+                      if(!msg.message) return; // Basic validation
+                      
                       try { 
                           const realNumber = (msg.key.participant || msg.key.remoteJid).split('@')[0]; 
+                          const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "Media/Other";
                           
-                          // 🔥 Sending EXTRA Data: "fromMe"
+                          // 🔥 DEBUGGING LOGS (Check GitHub Logs for these)
+                          if (msg.key.fromMe) {
+                              console.log(`📤 OUTGOING Detected: ${text} to ${realNumber}`);
+                          } else {
+                              console.log(`💬 INCOMING Detected: ${text} from ${realNumber}`);
+                          }
+
+                          // Send to n8n
                           await axios.post(N8N_URL, { 
                               from: realNumber, 
-                              text: msg.message.conversation || msg.message.extendedTextMessage?.text, 
+                              text: text, 
                               name: msg.pushName,
-                              fromMe: msg.key.fromMe, // Tells n8n if YOU sent it
+                              fromMe: msg.key.fromMe, // True = Sent by You
                               full_json: msg 
                           }); 
-                      } catch (e) {} 
+                      } catch (e) {
+                          console.error("Webhook Error:", e.message);
+                      } 
                   });
               } catch (e) { setTimeout(start, 5000); }
           }
@@ -266,13 +275,13 @@ jobs:
           EOF
 
           # Reverse Proxy
-          echo 'Status: v84 Online' > public/index.html
+          echo 'Status: v85 Online' > public/index.html
           printf ":80 {\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /reset wa-bot:10000\n reverse_proxy /health wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
 
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/public:/srv/public caddy:latest
           docker run -d --name wa-bot --network bot-net --restart unless-stopped -v $(pwd)/whatsapp:/app -w /app -e MONGODB_URI="${{ secrets.MONGODB_URI }}" node:20-alpine sh -c "apk add --no-cache git ffmpeg && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
-          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System v84 Online (Full Recorder)</b>" -d parse_mode="HTML"
+          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System v85 Online (With Logs)</b>" -d parse_mode="HTML"
 
       # 6. OBSERVER LOOP
       - name: 🔄 Observer Loop
